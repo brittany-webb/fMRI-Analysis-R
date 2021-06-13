@@ -1,0 +1,272 @@
+---
+title: "Statistical Analysis of fMRI"
+author: "Blue Webb"
+date: "12/7/2020"
+output:
+    pdf_document:
+        keep_tex: true
+classoption:
+    portrait
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE,message=FALSE,warning=FALSE,fig.width=5,fig.height=3.3,fig.align="center")
+```
+
+# Introduction
+
+Functional magnetic resonance imaging (fMRI) is a unique form of brain imagining that observes blood flow to the regions of the brain vs electrical activity. Specifically, the use of blood-oxygen-level-dependent imaging (BOLD) allows for observation of sites of brain activity. These signals peak several seconds after activation of a particular region. This allows for a depth of imagining exceeding that of PET and EEG, but presents certain challenges to statistical analysis due to the size of the data and the noise it generates. It is standard to conduct imaging in a block design where individuals alternate performing a cognitive task and resting. Following the experiment, pre-processing analyses prepare the data for task-related analyses through motion correction, normalization, and spatial smoothing.
+
+The primary goal of data analysis is in localizing brain activity, identifying active regions part of the same network, and classification/prediction. Several possible methods of task-related analysis have been proposed for fMRI data, each with their own pros and cons. We will review each of the proposed methods of analysis and demonstrate their approach on a simulation of fMRI data.
+
+```{r}
+library(fmri)
+library(tidyr)
+library(nlme)
+s2.bold <- read.NIFTI("C:/Users/profe/Downloads/sub-02 func sub-02_task-Emotionregulation_run-01_bold.nii/bold.nii")
+
+
+```
+
+# Visualization
+
+To understand what is being collected by fMRI, we observe a sample of data collected by Wager et al. (2018) investigating the prefrontal-subcortical pathways and their employment in mediating successful emotion regulation. 
+
+We may plot fmridata objects utilizing a GUI dependant on the package `tkrplot`. Figure 1 shows select axial slices of the subject's brain and corresponding BOLD signal across 192 scans.
+
+```{r, echo=FALSE,fig.cap="Axial view of Subject 2 and BOLD signaling",fig.align="center",out.width="80%",out.height="27%",fig.show='hold'}
+
+#library(tkrplot)
+
+#plot(subject2.bold, anatomic = NULL, maxpvalue = 0.05,spm = TRUE, pos = c(-1, -1, -1), type = #"slice",slice =  1, view = "axial" ,zlim.u =NULL, zlim.o = NULL,col.o = heat.colors(256), col.u #=grey(0:255/255), cutOff = c(0, 1))
+
+library(gridExtra)
+library(grid)
+library(png)
+img1 <-  rasterGrob(as.raster(readPNG("allslice.png")), interpolate = FALSE)
+img2 <-  rasterGrob(as.raster(readPNG("Bold.signal.S2.png")), interpolate = FALSE)
+
+grid.arrange(img1, img2, ncol = 2)
+
+
+```
+
+\newpage
+
+# Methods
+
+The `fmri` package in R contains many useful functions for manipulation of fmri data objects. `read.NIFTI` may be used to read NIFTI files, and subsequent functions like `cutroi` and `extractData` may be used in order to cut a specific brain region of interest and extract raw data stores into an array. 
+
+## 1. General Linear Model
+
+Generalized linear models are an attractive option for fMRI data analysis as they effectively handle independence violations among voxels. We may obtain a design matrix for a linear model given the expected BOLD responses. These responses may be obtained using `fmri.stimulus`, and the corresponding matrix is given by `fmri.design`. Typically, with the GLM approach, we will fit both within-subject and across-subject models. The first model focuses on a single subject and utilizes the image data to fit a model at each voxel. This allows for identifying within-subject contrasts that may be compared across groups with the group GLM. Ultimately this allows us to make inference about which voxels activity is occurring within. 
+
+This may similarly be understood as a mass univariate approach, wherein for each voxel a stimulus is the predictor and activity within a voxel is the outcome. With the assumption of voxel independence, we are able to conduct separate tests for each. Another key factor for consideration is the stimulus design. One possibility is a block design, where stimulation is sustained, and other is event-related design, where we see mixing of brief instances of different event times (i.e. there are no defined periods of "rest" followed by periods of "cognitive task"). Visually, we may understand block vs event designs (for a single voxel and single subject) modeled in the following way:
+
+```{r, out.height="40%", fig.align="center"}
+img5 <-  rasterGrob(as.raster(readPNG("block.des.vis.png")), interpolate = FALSE)
+img6 <-  rasterGrob(as.raster(readPNG("event.des.vis.png")), interpolate = FALSE)
+
+grid.arrange(img5, img6, ncol = 2,padding="-10%")
+```
+
+It is typical to fit a first level model for each of k subjects. Then, we formulate our model as
+
+$$Y_k = X_k\beta_k + e_k$$
+
+Where $Y_k$ is the fMRI signal at a single voxel for a single subject, $X_k$ is the design matrix, $\beta_k$ is a vector of regression coefficients, and $e_k$ is a vector of error terms. 
+
+
+## 2. Multivariate methods
+
+Multivariate approaches to analyzing fMRI data have pattern detecting capabilities and means of classification that are relevant to our goals of signal prediction and stimulus classification. Instead of the univariate approach which renders our entire ROI as having the same signaling pattern, we examine patterns across the individual voxels within the region and additionally across the brain at large. 
+
+Consider typing the words 'cat' and 'dog'. A univariate approach will recognize that three keys have been pressed and classify these as the same. A multivariate approach will examine the specific keys typed and in what order they were typed. Applied to fMRI, we examine not just a ROI where a signal was detected, but the spatial and temporal patterns of that signal. There are several types of multivariate analysis that may be considered, but two popular options are independent component analysis and multivoxel pattern analysis.
+
+### (i) Independent Component Analysis
+
+Independent component analysis (ICA) assumes independence of signals and allows for separation of signal sources. fMRI signals can be represented in a $X_{j,t}$ matrix with j = 1,..,J voxels and t = 1,..,T time samples. The approach is similar to that of principal component analysis (PCA), however ICA allows for identification of a mixing matrix. We may use ICA for signal reconstruction. Our basic model for ICA is
+
+$$X_{jt} = \sum_{k=1}^KA_{jk}S_{kt} + E_{jt}$$
+
+where A and S are formed by the K independent components, and E is temporal white noise. Then, if this model is true, we may reconstruct signals as follows:
+
+$$X_{jt}^{rec} = \Sigma_{k=1}^K X_{jt}^{(k)}, \quad X_{jt}^{(k)} = \Sigma_{k=1}^K A_{jk}S_{kt}$$
+In similar fashion to PCA, we may order components according to the amount of variability explained. Total signal variance is the sum of the component variances, defined as
+
+$$\sigma^2_{k} = \Sigma_{jt}^JA_{jk}S_{kt}^2$$
+We may visualize this concept in the following way:
+
+![](fig.ica.png)
+
+### (ii) Multi-voxel pattern analysis
+
+Multi-voxel pattern analysis (MVPA) is a typically supervised classification problem, where the classifier works to capture relationships of spatial patterns in fMRI and experimental conditions. Classification will look at fMRI signals in a cluster of voxels for a given trial in the experimental run and predict its class. Support vector machines (SVMs) represent one classifier of fMRI data that have achieved popularity due to their high performance and flexibility. This is done using the discriminant function
+
+$$f(x) = \Sigma_{j=1}^Mw^{(j)}x^{(j)} + b$$
+
+where $b$ is the bias and $w$ is the normal weight vector of the separating hyperplane and is maximized by $w = \Sigma_{i=1}^N \alpha_i y_i x_i, \quad \forall \alpha_i \geq 0$. Here $x_i$ is the input vector containing $M$ features, $y_i$ is the response (typically coded -1 or +1 to indicate either condition A or condition B), and the Lagrange multiplier $\alpha_i$ = 0 for every $x_i$ outside the margin. Those $x_i$ within the margin are support vectors. 
+
+
+# Analysis
+
+We will consider a simulation of fMRI data for employing GLM techniques. Let us consider a setting with just 5 subjects, and $T$ = 270 volumes (scans) per subject. Let TR = 2000 ms. We will design a task with three conditions:  
+  
+Baseline: Subject sees a blank white screen  
+Event 1: Subject views a ball moving across the screen and must press a button when it hits the end  
+Event 2: Subject views a ball moving across the screen and must press a button when it's halfway across  
+  
+Each condition will correspond to 30 volumes, or 60 seconds. The entire sequence will consist of 90 volumes and 180 seconds. This sequence will be repeated four times. We will code resting blocks as 0, experimental blocks as 1. We may visualize this:
+
+```{r}
+
+T = 360
+n=5
+emptyblock <- rep(0,30)
+taskblock <- rep(1,30)
+EVstim1 <- rep(c(emptyblock,taskblock,emptyblock),4)
+EVstim2 <- rep(c(emptyblock,emptyblock,taskblock),4)
+
+plot(1:T, EVstim1,type="n", ylab="", xlab="Volume Number (T)")
+lines(1:T,EVstim1,col="blue")
+lines(1:T,EVstim2,col="red")
+legend("topright", c("EVstim1", "EVstim2"), lty=c(1,1), col=c("blue", "red", cex=.75))
+
+```
+
+We will utilize `fmri.stimulus` to obtain our expected BOLD signals for our design matrix. Our onsets (volumes at which stimulus begins) for the first stimulus are at volumes 30, 120, 210, and 300, and for the second stimulus are 60, 150, 240, and 330. Our durations for each stimulus are 30 seconds. Figure 3 shows the canonical hemodynamic response function - we see that BOLD signal appears to be related to the onset of task conditions.
+
+```{r}
+baseonsets <- c(30, 30+90, 30+2*90, 30+3*90) 
+EV1 <- fmri.stimulus(scans=T, onsets=baseonsets,durations=c(30,30,30,30))
+EV2 <- fmri.stimulus(scans=T, onsets=(baseonsets+30),durations=c(30,30,30,30))
+plot(1:T, EV1,type="n", ylab="", xlab="Volume Number (T)")
+lines(1:T,EV1,col="blue")
+lines(1:T,EV2,col="red")
+legend("topright", c("EV1", "EV2"), lty=c(1,1), col=c("blue","red", cex=.75))
+```
+
+We will now specify coefficients. These specifications are arbitrary given the simulated nature of the data. We will select $\beta_0 = 2, \beta_1 = 4, \beta_2 = 6$ and $e_k = 1$. Using these we may simulate a time series for a single voxel for a single subject - we will simulate this for all 5 subjects. 
+
+```{r}
+beta0.fixed <- 2
+beta1.fixed <- 4
+beta2.fixed <- 6
+within.sd <- 1
+
+y1 <- beta0.fixed + EV1*beta1.fixed + EV2*beta2.fixed + rnorm(T, 0, within.sd)
+y2 <- beta0.fixed + EV1*beta1.fixed + EV2*beta2.fixed + rnorm(T, 0, within.sd)
+y3 <- beta0.fixed + EV1*beta1.fixed + EV2*beta2.fixed + rnorm(T, 0, within.sd)
+y4 <- beta0.fixed + EV1*beta1.fixed + EV2*beta2.fixed + rnorm(T, 0, within.sd)
+y5 <- beta0.fixed + EV1*beta1.fixed + EV2*beta2.fixed + rnorm(T, 0, within.sd)
+plot(y1, type='l', col='blue', ylab='BOLD Signal', xlab='Volume Number',main="Fixed Effects")
+
+lines(y2, col='red')
+lines(y3, col='dark green')
+lines(y4, col='blue')
+lines(y5, col='pink')
+legend("topright", c("Subject 1", "Subject 2", "Subject 3", "Subject 4", "Subject 5"), lty=c(1,1,1,1), 
+       col=c("red","dark green","blue","pink"), cex=0.75)
+
+
+
+```
+
+We see that each subject responds identically to the explanatory variables, which is unrealistic. We will allow for each subject's $\beta$ values to vary. We may use a mixed effects model that factors in our specified coefficients and includes randomized $\beta$s for each subject. We may construct a data frame of voxels for all subjects by applying this mixed effects model to each, creating a subject identifier, and creating event vectors as n = 5 repetitions of our expected BOLD (EV1 and EV2). 
+
+We visualize a plot of BOLD signaling by subject for the mixed effects model. We see greater signal variability when compared to the fixed effects model. Using maximum likelihood, we additionally observe estimates of our fixed and random coefficients. They're notably close to our selected parameter values.
+
+```{r}
+set.seed(500)
+sd0.random <- 0.6
+sd1.random <- 0.3
+sd2.random <- 0.9
+beta0.betweensub <- rnorm(n, 0, sd0.random)
+beta1.betweensub <- rnorm(n, 0, sd1.random)
+beta2.betweensub <- rnorm(n, 0, sd2.random)
+
+voxel.all.subjects <- function(i) {
+  Y <- beta0.fixed + EV1*beta1.fixed + EV2*beta2.fixed + beta0.betweensub[i] + EV1*beta1.betweensub[i] + EV2*beta2.betweensub[i] + rnorm(T, 0, within.sd)
+  return(Y)	
+}
+
+n=5
+
+allsubjs <- lapply(1:n, voxel.all.subjects)
+
+Y.g <- unlist(allsubjs)
+idnum <- unlist(lapply(1:n,rep,T))
+idnum <- as.factor(idnum)
+
+EV1.vec <- rep(EV1, n)
+EV2.vec <- rep(EV2, n)
+voxeldat <- data.frame(idnum, Y.g, EV1.vec, EV2.vec)
+
+model1 <- lme(Y.g ~ 1 + EV1.vec + EV2.vec,
+              random = ~1 + EV1.vec + EV2.vec|idnum, data=voxeldat, method=c("ML"), control = lmeControl(opt = 'optim'))
+
+fixed.coeff <- as.vector(c(round(model1$coefficients$fixed,3), rep("-",12)))
+random.coeff <- as.vector(round(model1$coefficients$random$idnum,3))
+
+comb <- cbind(fixed.coeff,random.coeff)
+colnames(comb) <- c("Fixed","Random")
+
+plot(Y.g[1:360], type='l', col='blue', ylab='BOLD Signal', xlab='Volume Number',main="Mixed Effects")
+
+lines(Y.g[361:720], col='red')
+lines(Y.g[721:1080], col='dark green')
+lines(Y.g[1081:1440], col='blue')
+lines(Y.g[1441:1800], col='pink')
+legend("topright", c("Subject 1", "Subject 2", "Subject 3", "Subject 4", "Subject 5"), lty=c(1,1,1,1), 
+       col=c("red","dark green","blue","pink"), cex=0.75)
+
+library(knitr)
+kable(comb)
+
+
+
+```
+
+We may further use this to test a hypothesis of whether BOLD signal in a voxel is different between two conditions. For instance, the test statistics for the contrast EV2 - EV2 
+
+$$t = \frac{-\beta_1 + \beta_2}{\sqrt{c\Sigma c'}} = 3.07, \quad p = 0.00107$$
+
+```{r, eval=TRUE,warning=FALSE,message=FALSE}
+
+contr <- c(0, -1, 1)
+out <- anova(model1, L=contr)
+tstat <- t(contr) %*% model1$coefficients$fixed / sqrt(t(contr) %*% vcov(model1) %*% contr) 
+pvalue <- 1 - pt(tstat, df=out$denDF)
+```
+
+Thus we have evidence of a significant different in BOLD signaling within a voxel between condition one (responding when the ball is at the end of the screen) vs condition two (responding when the ball is halfway across the screen).
+
+We may turn to ICA and use our example from the beginning of the emotion regulation tasks subjects underwent. We will perform ICA with 10 components for Subject 2 
+
+```{r, include=FALSE}
+
+library(fastICA)
+sICA.test <- fmri.sICA(s2.bold, mask=NULL, ncomp=20,alg.typ=c("parallel","deflation"), fun=c("logcosh","exp"),alpha=1, detrend=TRUE, degree=2, nuisance= NULL, ssmooth=TRUE,tsmooth=TRUE, bwt=4, bws=8, unit=c("FWHM","SD"))
+
+```
+
+```{r, fig.width=10}
+
+par(mfrow=c(1,1))
+par(mar=c(0,0,0,0))
+
+
+
+plot(sICA.test, comp = 1, center = NULL, thresh = 1.5)
+plot(sICA.test, comp = 2, center = NULL, thresh = 1.5)
+
+
+
+```
+
+
+# Discussion
+
+GLM and multivariate techniques have indispensable roles in analysis of fMRI data. With our simulated data we were able to fit a mixed effects model and carry out a hypothesis test to determine whether there was a significant difference in BOLD signaling in a voxel between the tasks of reacting when a ball reaches the end of the screen vs reacting when it reaches the halfway point. While data used is only theoretical, this signaling might suggest recruitment of a specific region of the brain when performing more exacting tasks (i.e., discerning a "middle" vs an "end"). In particular, the posterior parietal cortex is involved in spatial reasoning, so we may expect greater BOLD signaling in this ROI during the second condition.
+
+Application of ICA to the Wager et al. data for Subject 2 allowed for visualization of the components across the sagittal, coronal, and axial views which is critical for identifying signals in the differing regions. The first component demonstrated high positive signaling within the frontal lobe, and the second demonstrated high negative signaling in the frontal lobe as well as within the thalamus. 
